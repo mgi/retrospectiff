@@ -21,7 +21,8 @@
                  (1 (1+ (ash (1- width) -3)))
                  (4 (1+ (ash (1- width) -1)))
                  (8 width)
-                 (16 (ash width 1)))))
+                 (16 (ash width 1))
+                 (32 (ash width 2)))))
           (let ((strip-length (ceiling (length decompressed-bytes) bytes-per-row)))
             (let ((end-row (+ start-row strip-length)))
               (loop for i from start-row below end-row
@@ -153,6 +154,59 @@
                                        (ldb (byte 8 8) new))
                                  (setf (aref data (1+ offset))
                                        (ldb (byte 8 0) new))))))))))))
+
+         (make-instance 'tiff-image
+                        :length image-length :width image-width
+                        :bits-per-sample bits-per-sample
+                        :samples-per-pixel 1 :data data
+                        :byte-order *byte-order*)))
+      (32
+       (let* ((bytes-per-pixel 4)
+              (data (make-array (* image-width image-length bytes-per-pixel))))
+         (loop for strip-offset across strip-offsets
+               for strip-byte-count across strip-byte-counts
+               for row-offset = 0 then (+ row-offset rows-per-strip)
+               do (read-grayscale-strip stream image-info data row-offset
+                                        strip-offset strip-byte-count
+                                        image-width
+                                        bits-per-sample
+                                        compression))
+
+         (case predictor
+           (#.+horizontal-differencing+
+            (loop for i below image-length
+                  do (loop for j from 1 below image-width
+                           do (let ((offset (+ (* i image-width bytes-per-pixel)
+                                               (* bytes-per-pixel j))))
+                                (ecase *byte-order*
+                                  (:little-endian
+                                   (let* ((old (+ (aref data (- offset 4))
+                                                  (ash (aref data (- offset 3)) 8)
+                                                  (ash (aref data (- offset 2)) 16)
+                                                  (ash (aref data (- offset 1)) 24)))
+                                          (diff (+ (aref data offset)
+                                                   (ash (aref data (+ offset 1)) 8)
+                                                   (ash (aref data (+ offset 2)) 16)
+                                                   (ash (aref data (+ offset 3)) 24)))
+                                          (new (logand (+ old diff) #xffffffff)))
+                                     (setf (aref data offset) (ldb (byte 8 0) new)
+                                           (aref data (1+ offset)) (ldb (byte 8 8) new)
+                                           (aref data (+ offset 2)) (ldb (byte 8 16) new)
+                                           (aref data (+ offset 3)) (ldb (byte 8 24) new))))
+                                  (:big-endian
+                                   (let* ((old (+ (aref data (- offset 1))
+                                                  (ash (aref data (- offset 2)) 8)
+                                                  (ash (aref data (- offset 3)) 16)
+                                                  (ash (aref data (- offset 4)) 24)))
+                                          (diff (+ (aref data (+ offset 3))
+                                                   (ash (aref data (+ offset 2)) 8)
+                                                   (ash (aref data (1+ offset)) 16)
+                                                   (ash (aref data offset) 24)))
+                                          (new (logand (+ old diff) #xffffffff)))
+                                     (setf (aref data offset) (ldb (byte 8 24) new)
+                                           (aref data (1+ offset)) (ldb (byte 8 16) new)
+                                           (aref data (+ offset 2)) (ldb (byte 8 8) new)
+                                           (aref data (+ offset 3)) (ldb (byte 8 0) new))))))))))
 
          (make-instance 'tiff-image
                         :length image-length :width image-width
